@@ -23,7 +23,7 @@ export const useCodexEvents = ({
   sessionId, 
   onApprovalRequest
 }: UseCodexEventsProps) => {
-  const { addMessage, updateLastMessage, updateLastMessageReasoning, updateLastMessageToolOutput, setSessionLoading, createConversation, snapshotConversations } = useConversationStore();
+  const { addMessage, updateLastMessage, updateLastMessageReasoning, updateLastMessageToolOutput, setSessionLoading, createConversation, snapshotConversations, setStreamingActive } = useConversationStore();
   const DEBUG = (import.meta as any)?.env?.DEV && (window as any)?.__CODEX_DEBUG === true;
 
   // Buffer for streaming answer deltas with coalesced flushing
@@ -307,6 +307,7 @@ export const useCodexEvents = ({
         resetAnswerStats();
         resetToolBuffer();
         setSessionLoading(sessionId, true);
+        setStreamingActive(true);
         break;
         
       case 'task_complete':
@@ -317,6 +318,7 @@ export const useCodexEvents = ({
         resetAnswerStats();
         setSessionLoading(sessionId, false);
         snapshotConversations();
+        setStreamingActive(false);
         // Mark last assistant as not streaming
         {
           const state = useConversationStore.getState();
@@ -337,6 +339,7 @@ export const useCodexEvents = ({
         resetAnswerStats();
         setSessionLoading(sessionId, false);
         snapshotConversations();
+        setStreamingActive(false);
         {
           const state = useConversationStore.getState();
           const conv = state.conversations.find(c => c.id === sessionId);
@@ -387,6 +390,7 @@ export const useCodexEvents = ({
           state = useConversationStore.getState();
           conv = state.conversations.find(c => c.id === sessionId) || null as any;
         }
+        setStreamingActive(true);
         const msgs = conv?.messages || [];
         const last = msgs[msgs.length - 1] as any;
         if (!(last && last.role === 'assistant')) {
@@ -416,6 +420,7 @@ export const useCodexEvents = ({
           state = useConversationStore.getState();
           conv = state.conversations.find(c => c.id === sessionId) || null as any;
         }
+        setStreamingActive(true);
         const msgs = conv?.messages || [];
         const last = msgs[msgs.length - 1] as any;
         if (!(last && last.role === 'assistant')) {
@@ -510,10 +515,12 @@ export const useCodexEvents = ({
         };
         addMessageToStore(errorMessage);
         setSessionLoading(sessionId, false);
+        setStreamingActive(false);
         break;
         
       case 'shutdown_complete':
         if (DEBUG) console.log('Session shutdown completed');
+        setStreamingActive(false);
         break;
         
       case 'background_event': {
