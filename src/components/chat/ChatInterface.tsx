@@ -77,7 +77,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             ? "agent"
             : "system") as "user" | "agent" | "system",
         content: msg.content,
-        timestamp: new Date(typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()),
+        // For codex message rendering, timestamp should be a Date instance
+        timestamp: new Date(
+          typeof msg.timestamp === "number" ? msg.timestamp : Date.now()
+        ),
+        // Pass through streaming-related fields for MessageList to render
+        isStreaming: (msg as any).isStreaming || false,
+        reasoning: (msg as any).reasoning || "",
+        isReasoningStreaming: (msg as any).isReasoningStreaming || false,
+        toolOutput: (msg as any).toolOutput || "",
+        isToolStreaming: (msg as any).isToolStreaming || false,
       }))
     : [];
 
