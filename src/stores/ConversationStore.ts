@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type { Conversation, ChatMessage, ChatMode } from "@/types/chat";
 import { CodexConfig, DEFAULT_CONFIG } from "@/types/codex";
 
@@ -10,6 +10,8 @@ interface ConversationStore {
   
   // Conversations
   conversations: Conversation[];
+  // Snapshot used only for persistence to avoid heavy writes during streaming
+  conversationsSnapshot?: Conversation[];
   currentConversationId: string | null;
   sessionDisconnected: boolean;
   pendingUserInput: string | null;
@@ -24,6 +26,7 @@ interface ConversationStore {
   updateConversationTitle: (id: string, title: string) => void;
   updateConversationMode: (id: string, mode: ChatMode) => void;
   toggleFavorite: (id: string) => void;
+  snapshotConversations: () => void;
 
   // Session management
   setSessionDisconnected: (disconnected: boolean) => void;
@@ -67,6 +70,7 @@ export const useConversationStore = create<ConversationStore>()(
       // Initial state
       config: DEFAULT_CONFIG,
       conversations: [],
+      conversationsSnapshot: undefined,
       currentConversationId: null,
       sessionDisconnected: false,
       pendingUserInput: null,
@@ -166,6 +170,17 @@ export const useConversationStore = create<ConversationStore>()(
         }));
       },
 
+      // Capture a lightweight snapshot for persistence at safe times (e.g., turn/task complete)
+      snapshotConversations: () => {
+        const state = get();
+        // Shallow clone conversations and messages so later in-memory streaming updates won't mutate snapshot
+        const snapshot = state.conversations.map((conv) => ({
+          ...conv,
+          messages: conv.messages.slice(),
+        }));
+        set({ conversationsSnapshot: snapshot });
+      },
+
       toggleFavorite: (id: string) => {
         set((state) => ({
           conversations: state.conversations.map((conv) =>
@@ -261,7 +276,8 @@ export const useConversationStore = create<ConversationStore>()(
               return {
                 ...conv,
                 messages: updatedMessages,
-                updatedAt: Date.now(),
+                // Avoid touching updatedAt on every small streaming delta to reduce re-renders/persist cost
+                ...(opts && opts.isStreaming ? {} : { updatedAt: Date.now() }),
               };
             }
             return conv;
@@ -284,7 +300,7 @@ export const useConversationStore = create<ConversationStore>()(
               return {
                 ...conv,
                 messages: updatedMessages,
-                updatedAt: Date.now(),
+                ...(opts && opts.isStreaming ? {} : { updatedAt: Date.now() }),
               };
             }
             return conv;
@@ -307,7 +323,7 @@ export const useConversationStore = create<ConversationStore>()(
               return {
                 ...conv,
                 messages: updatedMessages,
-                updatedAt: Date.now(),
+                ...(opts && opts.isStreaming ? {} : { updatedAt: Date.now() }),
               };
             }
             return conv;
@@ -331,9 +347,24 @@ export const useConversationStore = create<ConversationStore>()(
     {
       name: "conversation-storage", 
       version: 4,
+      storage: createJSONStorage(() => {
+        const base = window.localStorage;
+        const cache: Record<string, string> = (window as any).__PERSIST_CACHE || {};
+        (window as any).__PERSIST_CACHE = cache;
+        return {
+          getItem: (name: string) => base.getItem(name),
+          removeItem: (name: string) => base.removeItem(name),
+          setItem: (name: string, value: string) => {
+            if (cache[name] === value) return; // skip identical writes
+            cache[name] = value;
+            base.setItem(name, value);
+          },
+        } as Storage;
+      }),
       partialize: (state) => ({
         config: state.config,
-        conversations: state.conversations,
+        // Persist snapshot if available (captured at turn/task boundaries). Falls back to live conversations otherwise.
+        conversations: state.conversationsSnapshot ?? state.conversations,
         currentConversationId: state.currentConversationId,
       }),
       migrate: (persistedState: any, version: number) => {
