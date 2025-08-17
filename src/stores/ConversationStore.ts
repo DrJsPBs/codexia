@@ -34,7 +34,7 @@ interface ConversationStore {
 
   // Message management
   addMessage: (conversationId: string, message: ChatMessage) => void;
-  updateLastMessage: (conversationId: string, content: string) => void;
+  updateLastMessage: (conversationId: string, content: string, opts?: { isStreaming?: boolean }) => void;
 
   // Getters
   getCurrentConversation: () => Conversation | null;
@@ -244,7 +244,7 @@ export const useConversationStore = create<ConversationStore>()(
         });
       },
 
-      updateLastMessage: (conversationId: string, content: string) => {
+      updateLastMessage: (conversationId: string, content: string, opts?: { isStreaming?: boolean }) => {
         set((state) => ({
           conversations: state.conversations.map((conv) => {
             if (conv.id === conversationId && conv.messages.length > 0) {
@@ -253,6 +253,7 @@ export const useConversationStore = create<ConversationStore>()(
               updatedMessages[updatedMessages.length - 1] = {
                 ...lastMessage,
                 content,
+                ...(opts && typeof opts.isStreaming !== 'undefined' ? { isStreaming: opts.isStreaming } : {}),
               };
 
               return {
