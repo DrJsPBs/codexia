@@ -26,6 +26,7 @@ export const useCodexEvents = ({
   const { addMessage, updateLastMessage, updateLastMessageReasoning, updateLastMessageToolOutput, setSessionLoading, createConversation, snapshotConversations, setStreamingActive } = useConversationStore();
   // Enable raw passthrough by default; set window.__CODEX_RAW_STREAM = false to disable
   const RAW_STREAM = (typeof window !== 'undefined') ? ((window as any).__CODEX_RAW_STREAM !== false) : true;
+  const METRICS = (typeof window !== 'undefined') ? ((window as any).__CODEX_METRICS === true) : false;
   const DEBUG = (import.meta as any)?.env?.DEV && (window as any)?.__CODEX_DEBUG === true;
 
   // Buffer for streaming answer deltas with coalesced flushing
@@ -601,8 +602,19 @@ export const useCodexEvents = ({
 
     // Listen to the global codex-events channel
     const eventUnlisten = listen<CodexEvent>("codex-events", (event) => {
-      const codexEvent = event.payload;
-      if (DEBUG) console.log('evt:', (codexEvent as any)?.msg?.type);
+      const codexEvent = event.payload as any;
+      const t_recv = Date.now();
+      if (DEBUG) console.log('evt:', codexEvent?.msg?.type);
+      if (METRICS) {
+        const t_emit = codexEvent?.t_emit_ms || 0;
+        const t_read = codexEvent?.t_read_ms || 0;
+        if (t_emit && t_read) {
+          const parse = t_emit - t_read;
+          const delivery = t_recv - t_emit;
+          const total = t_recv - t_read;
+          console.log(`[timing] ${codexEvent?.msg?.type} parse=${parse}ms delivery=${delivery}ms total=${total}ms`);
+        }
+      }
 
       // If the event includes a session_id, ensure it matches ours
       const eventSessionId = getEventSessionId(codexEvent);
