@@ -134,20 +134,11 @@ impl CodexClient {
         tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
-            
             log_to_file(&format!("Starting stdout reader for session: {}", session_id_clone));
-            
             while let Ok(Some(line)) = lines.next_line().await {
-                log_to_file(&format!("Received line from codex: {}", line));
                 if let Ok(event) = serde_json::from_str::<Event>(&line) {
-                    log_to_file(&format!("Parsed event: {:?}", event));
-                    
-                    // Log the event for debugging
-                    if let Some(event_session_id) = get_session_id_from_event(&event) {
-                        log_to_file(&format!("Event for session: {}", event_session_id));
-                    }
-                    
-                    // Use a single global event channel instead of per-session channels
+                    // Minimal logging by default to avoid I/O stalls
+                    // Forward all events on a single global channel consumed by the UI
                     if let Err(e) = app_clone.emit("codex-events", &event) {
                         log_to_file(&format!("Failed to emit event: {}", e));
                     }
