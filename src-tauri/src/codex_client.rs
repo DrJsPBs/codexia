@@ -45,23 +45,23 @@ impl CodexClient {
             return Err(anyhow::anyhow!("Could not find codex executable"));
         };
 
-        // Build base arguments
-        let mut built_args: Vec<String> = vec!["proto".to_string()];
+        let mut cmd = Command::new(&command);
+        if !args.is_empty() {
+            cmd.args(&args);
+        }
+        cmd.arg("proto");
         
         // Use -c configuration parameter format (codex proto only supports -c configuration)
         if config.use_oss {
-            built_args.push("-c".to_string());
-            built_args.push("model_provider=oss".to_string());
+            cmd.arg("-c").arg("model_provider=oss");
         }
         
         if !config.model.is_empty() {
-            built_args.push("-c".to_string());
-            built_args.push(format!("model={}", config.model));
+            cmd.arg("-c").arg(format!("model={}", config.model));
         }
         
         if !config.approval_policy.is_empty() {
-            built_args.push("-c".to_string());
-            built_args.push(format!("approval_policy={}", config.approval_policy));
+            cmd.arg("-c").arg(format!("approval_policy={}", config.approval_policy));
         }
         
         if !config.sandbox_mode.is_empty() {
@@ -71,92 +71,36 @@ impl CodexClient {
                 "danger-full-access" => "sandbox_mode=danger-full-access".to_string(),
                 _ => "sandbox_mode=workspace-write".to_string(),
             };
-            built_args.push("-c".to_string());
-            built_args.push(sandbox_config);
+            cmd.arg("-c").arg(sandbox_config);
         }
 
         // Optional dev override: force reasoning visibility like CLI
         if std::env::var("CODEX_FORCE_REASONING").ok().as_deref() == Some("1") {
-            built_args.push("-c".to_string());
-            built_args.push("show_raw_agent_reasoning=true".to_string());
-            built_args.push("-c".to_string());
-            built_args.push("model_reasoning_effort=high".to_string());
-            built_args.push("-c".to_string());
-            built_args.push("model_reasoning_summary=detailed".to_string());
+            cmd.arg("-c").arg("show_raw_agent_reasoning=true");
+            cmd.arg("-c").arg("model_reasoning_effort=high");
+            cmd.arg("-c").arg("model_reasoning_summary=detailed");
         }
-        // Add any custom args from config
+        
+        // Set working directory for the process
+        if !config.working_directory.is_empty() {
+            cmd.current_dir(&config.working_directory);
+        }
+        
+        // Add custom arguments
         if let Some(custom_args) = &config.custom_args {
             for arg in custom_args {
-                built_args.push(arg.clone());
+                cmd.arg(arg);
             }
         }
-
-        // Decide on a spawn strategy: optional TTY wrapper using `script -qf -c` to mimic CLI flushing
-        let use_tty = std::env::var("CODEX_TTY").ok().as_deref() == Some("1");
-        let mut process: Child;
-        if use_tty {
-            if which::which("script").is_ok() {
-                // Compose a single shell-escaped command string
-                fn sh_escape(s: &str) -> String {
-                    if s.is_empty() { return "''".to_string(); }
-                    let mut out = String::from("'");
-                    for c in s.chars() {
-                        if c == '\'' { out.push_str("'\\''"); } else { out.push(c); }
-                    }
-                    out.push('\'');
-                    out
-                }
-                let mut full = Vec::new();
-                full.push(sh_escape(&command));
-                if !args.is_empty() {
-                    for a in &args { full.push(sh_escape(a)); }
-                }
-                for a in &built_args { full.push(sh_escape(a)); }
-                let cmd_str = full.join(" ");
-
-                let mut cmd = Command::new("script");
-                cmd.arg("-qf");
-                cmd.arg("-c").arg(cmd_str);
-                cmd.arg("/dev/null");
-                if !config.working_directory.is_empty() {
-                    cmd.current_dir(&config.working_directory);
-                }
-                log_to_file(&format!("Starting codex via script pty: {:?}", cmd));
-                process = cmd
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()?;
-            } else {
-                // Fallback: stdbuf if available
-                if which::which("stdbuf").is_ok() {
-                    let mut cmd = Command::new("stdbuf");
-                    cmd.arg("-oL").arg("-eL");
-                    cmd.arg(&command);
-                    if !args.is_empty() { cmd.args(&args); }
-                    cmd.args(&built_args);
-                    if !config.working_directory.is_empty() { cmd.current_dir(&config.working_directory); }
-                    log_to_file(&format!("Starting codex via stdbuf: {:?}", cmd));
-                    process = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-                } else {
-                    // Plain spawn
-                    let mut cmd = Command::new(&command);
-                    if !args.is_empty() { cmd.args(&args); }
-                    cmd.args(&built_args);
-                    if !config.working_directory.is_empty() { cmd.current_dir(&config.working_directory); }
-                    log_to_file(&format!("Starting codex plain: {:?}", cmd));
-                    process = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-                }
-            }
-        } else {
-            // Plain spawn (default)
-            let mut cmd = Command::new(&command);
-            if !args.is_empty() { cmd.args(&args); }
-            cmd.args(&built_args);
-            if !config.working_directory.is_empty() { cmd.current_dir(&config.working_directory); }
-            log_to_file(&format!("Starting codex plain: {:?}", cmd));
-            process = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-        }
+        
+        // Print the command to be executed for debugging
+        log_to_file(&format!("Starting codex with command: {:?}", cmd));
+        
+        let mut process = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
 
         let stdin = process.stdin.take().expect("Failed to open stdin");
         let stdout = process.stdout.take().expect("Failed to open stdout");
@@ -221,14 +165,7 @@ impl CodexClient {
                         log_to_file(&format!("Failed to emit event: {}", e));
                     }
                 } else {
-                    // Forward as error event to surface protocol issues without heavy logging
-                    let fallback = FrontendEvent {
-                        id: "parse_error".to_string(),
-                        msg: EventMsg::Error { message: format!("Invalid event JSON: {}", line) },
-                        t_read_ms,
-                        t_emit_ms: t_read_ms,
-                    };
-                    let _ = app_clone.emit(&format!("codex-event-{}", session_id_clone), &fallback);
+                    log_to_file(&format!("Failed to parse codex event: {}", line));
                 }
             }
             log_to_file(&format!("Stdout reader terminated for session: {}", session_id_clone));
